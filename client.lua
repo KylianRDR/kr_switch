@@ -1,244 +1,272 @@
-local playerHealth = 100
-local lastHitTime = {}
-local healthState = "normal"
-local stateEndTime = 0
-local timerPrinted = false
-local bodyParts = {}
+local allCharacters = {}
+local archivedCharacters = {}
+local lib = exports['ox_lib']
 
-local function InitializeBodyParts()
-    for partName, _ in pairs(Config.BodyParts) do
-        bodyParts[partName] = {
-            health = 100,
-            weapons = {}
+RegisterNetEvent('character_archive:openMenu')
+AddEventHandler('character_archive:openMenu', function()
+    local options = {
+        {
+            title = 'Liste des Personnages Actifs',
+            description = 'Voir tous les personnages actifs',
+            icon = 'users',
+            onSelect = function()
+                TriggerServerEvent('character_archive:getAllCharacters')
+            end
+        },
+        {
+            title = 'Personnages ArchivÃ©s',
+            description = 'GÃ©rer les personnages archivÃ©s',
+            icon = 'archive',
+            onSelect = function()
+                TriggerServerEvent('character_archive:getArchivedCharacters')
+            end
         }
-    end
-end
+    }
 
-local function GetBoneZone(boneId)
-    for _, headBone in ipairs(Config.BoneZones.head) do
-        if boneId == headBone then
-            return "head"
-        end
-    end
-    
-    for _, bodyBone in ipairs(Config.BoneZones.body) do
-        if boneId == bodyBone then
-            return "body"
-        end
-    end
-    
-    for _, limbBone in ipairs(Config.BoneZones.limbs) do
-        if boneId == limbBone then
-            return "limbs"
-        end
-    end
-    
-    return "body"
-end
-
-local function GetBodyPartFromBone(boneId)
-    for partName, bones in pairs(Config.BodyParts) do
-        for _, bone in ipairs(bones) do
-            if bone == boneId then
-                return partName
-            end
-        end
-    end
-    return "torse"
-end
-
-local function GetHitBone(victim)
-    local hit, bone = GetPedLastDamageBone(victim)
-    if hit then
-        return bone
-    end
-    
-    local playerPed = PlayerPedId()
-    local playerCoords = GetEntityCoords(playerPed)
-    local victimCoords = GetEntityCoords(victim)
-    
-    local rayHandle = StartExpensiveSynchronousShapeTestLosProbe(
-        playerCoords.x, playerCoords.y, playerCoords.z + 0.5,
-        victimCoords.x, victimCoords.y, victimCoords.z + 1.0,
-        -1, playerPed, 0
-    )
-    
-    local _, rayHit, hitCoords = GetShapeTestResult(rayHandle)
-    
-    if rayHit == 1 then
-        local closestBone = 24818
-        local closestDistance = 999.0
-        
-        for boneId, boneName in pairs(Config.BoneNames) do
-            local boneCoords = GetPedBoneCoords(victim, boneId, 0.0, 0.0, 0.0)
-            local distance = #(hitCoords - boneCoords)
-            
-            if distance < closestDistance then
-                closestDistance = distance
-                closestBone = boneId
-            end
-        end
-        
-        return closestBone
-    end
-    
-    return 24818
-end
-
-local function CalculateDamage(weaponHash, boneId)
-    local weaponConfig = Config.WeaponDamage[weaponHash]
-    if not weaponConfig then
-        return 10
-    end
-    
-    local zone = GetBoneZone(boneId)
-    
-    if zone == "head" then
-        return weaponConfig.headDamage
-    elseif zone == "body" then
-        return weaponConfig.bodyDamage
-    else
-        return weaponConfig.limbDamage
-    end
-end
-
-local function UpdateBodyPartDamage(boneId, damage, weaponHash)
-    local bodyPart = GetBodyPartFromBone(boneId)
-    local weaponName = Config.WeaponNames[weaponHash] or "ARME_INCONNUE"
-    
-    if GetBoneZone(boneId) == "head" then
-        bodyParts[bodyPart].health = 0
-    else
-        bodyParts[bodyPart].health = bodyParts[bodyPart].health - damage
-        if bodyParts[bodyPart].health < 0 then
-            bodyParts[bodyPart].health = 0
-        end
-    end
-    
-    local weaponFound = false
-    for _, weapon in ipairs(bodyParts[bodyPart].weapons) do
-        if weapon == weaponName then
-            weaponFound = true
-            break
-        end
-    end
-    
-    if not weaponFound then
-        table.insert(bodyParts[bodyPart].weapons, weaponName)
-    end
-end
-
-local function UpdateHealthState(damage)
-    local totalDamage = 100 - playerHealth
-    
-    for stateName, stateConfig in pairs(Config.HealthStates) do
-        if totalDamage >= stateConfig.minDamage and totalDamage <= stateConfig.maxDamage then
-            if healthState ~= stateName then
-                healthState = stateName
-                stateEndTime = GetGameTimer() + stateConfig.duration
-                timerPrinted = false
-                print("ENTREE ETAT: " .. stateConfig.message .. " (Duree: " .. stateConfig.duration/1000 .. "s)")
-                TriggerServerEvent('damageSystem:stateChanged', stateName, stateConfig.message)
-                
-                if stateName == "dead" then
-                    SetEntityHealth(PlayerPedId(), 0)
-                end
-            else
-                stateEndTime = GetGameTimer() + stateConfig.duration
-                timerPrinted = false
-            end
-            break
-        end
-    end
-end
-
-local function ProcessDamage(damage, boneId, weaponHash)
-    playerHealth = playerHealth - damage
-    if playerHealth < 0 then
-        playerHealth = 0
-    end
-    
-    UpdateBodyPartDamage(boneId, damage, weaponHash)
-    UpdateHealthState(damage)
-end
-
-RegisterNetEvent('damageSystem:openMedicalExam')
-AddEventHandler('damageSystem:openMedicalExam', function(targetData)
-    SendNUIMessage({
-        action = 'openMedicalExam',
-        bodyParts = targetData.bodyParts,
-        playerName = targetData.playerName
+    lib:registerContext({
+        id = 'character_archive_main',
+        title = 'Gestion des Personnages',
+        options = options
     })
-    SetNuiFocus(true, true)
+    lib:showContext('character_archive_main')
 end)
 
-RegisterNUICallback('closeMedicalExam', function(data, cb)
-    SetNuiFocus(false, false)
-    cb('ok')
-end)
-
-AddEventHandler('gameEventTriggered', function(name, data)
-    if name == 'CEventNetworkEntityDamage' then
-        local victim = data[1]
-        local attacker = data[2]
-        local weaponHash = data[3]
-        local playerPed = PlayerPedId()
-        
-        if IsEntityAPed(victim) and IsEntityAPed(attacker) and IsPedAPlayer(victim) and IsPedAPlayer(attacker) then
-            local currentTime = GetGameTimer()
-            local hitId = tostring(attacker) .. "_" .. tostring(victim) .. "_" .. tostring(weaponHash) .. "_" .. tostring(currentTime)
-            
-            if not lastHitTime[hitId] then
-                lastHitTime[hitId] = true
-                
-                Citizen.SetTimeout(100, function()
-                    lastHitTime[hitId] = nil
-                end)
-                
-                local bone = GetHitBone(victim)
-                local boneName = Config.BoneNames[bone] or ("BONE_" .. tostring(bone))
-                local damage = CalculateDamage(weaponHash, bone)
-                
-                if victim == playerPed then
-                    local attackerId = GetPlayerServerId(NetworkGetPlayerIndexFromPed(attacker))
-                    local oldHealth = playerHealth
-                    ProcessDamage(damage, bone, weaponHash)
-                    print("IMPACT: " .. damage .. " degats recu de joueur " .. attackerId .. " sur " .. boneName .. " (Vie: " .. oldHealth .. " -> " .. playerHealth .. ")")
-                    TriggerServerEvent('damageSystem:damageReceived', attackerId, GetPlayerServerId(PlayerId()), damage, boneName)
-                    TriggerServerEvent('damageSystem:updateBodyParts', bodyParts)
-                end
-                
-                if attacker == playerPed then
-                    local victimId = GetPlayerServerId(NetworkGetPlayerIndexFromPed(victim))
-                    print("TIR REUSSI: " .. damage .. " degats inflige a joueur " .. victimId .. " sur " .. boneName)
-                    TriggerServerEvent('damageSystem:damageDealt', GetPlayerServerId(PlayerId()), victimId, damage, boneName)
+RegisterNetEvent('character_archive:receiveAllCharacters')
+AddEventHandler('character_archive:receiveAllCharacters', function(characters)
+    if not characters or type(characters) ~= 'table' then
+        characters = {}
+    end
+    
+    allCharacters = characters
+    
+    local options = {}
+    
+    for i = 1, #characters do
+        local char = characters[i]
+        if char and type(char) == 'table' and char.firstname and char.lastname and char.identifier then
+            local accounts = {}
+            if char.accounts and type(char.accounts) == 'string' and char.accounts ~= '' then
+                local success, decoded = pcall(json.decode, char.accounts)
+                if success and type(decoded) == 'table' then
+                    accounts = decoded
                 end
             end
+            local money = accounts.money or 0
+            
+            table.insert(options, {
+                title = tostring(char.firstname) .. ' ' .. tostring(char.lastname),
+                description = 'Job: ' .. tostring(char.job or 'Inconnu') .. ' | Argent: $' .. tostring(money) .. ' | ID: ' .. tostring(char.identifier),
+                icon = 'user',
+                onSelect = function()
+                    showCharacterActions(char)
+                end
+            })
         end
+    end
+    
+    if #options == 0 then
+        table.insert(options, {
+            title = 'Aucun personnage trouvÃ©',
+            description = 'Aucun personnage actif dans la base de donnÃ©es',
+            icon = 'exclamation-triangle',
+            disabled = true
+        })
+    end
+    
+    table.insert(options, {
+        title = 'Retour',
+        description = 'Retourner au menu principal',
+        icon = 'arrow-left',
+        onSelect = function()
+            TriggerEvent('character_archive:openMenu')
+        end
+    })
+    
+    if #options > 0 then
+        lib:registerContext({
+            id = 'character_list',
+            title = 'Personnages Actifs (' .. tostring(#characters) .. ')',
+            options = options
+        })
+        lib:showContext('character_list')
     end
 end)
 
-Citizen.CreateThread(function()
-    while true do
-        Citizen.Wait(1000)
-        
-        if healthState ~= "normal" and healthState ~= "dead" and stateEndTime > 0 and GetGameTimer() >= stateEndTime and not timerPrinted then
-            timerPrinted = true
-            print("TIMER FINI: Etat final " .. Config.HealthStates[healthState].message)
+RegisterNetEvent('character_archive:receiveArchivedCharacters')
+AddEventHandler('character_archive:receiveArchivedCharacters', function(characters)
+    if not characters or type(characters) ~= 'table' then
+        characters = {}
+    end
+    
+    archivedCharacters = characters
+    
+    local options = {}
+    
+    for i = 1, #characters do
+        local char = characters[i]
+        if char and type(char) == 'table' and char.firstname and char.lastname then
+            local accounts = {}
+            if char.accounts and type(char.accounts) == 'string' and char.accounts ~= '' then
+                local success, decoded = pcall(json.decode, char.accounts)
+                if success and type(decoded) == 'table' then
+                    accounts = decoded
+                end
+            end
+            local money = accounts.money or 0
+            
+            table.insert(options, {
+                title = tostring(char.firstname) .. ' ' .. tostring(char.lastname),
+                description = 'ArchivÃ© le: ' .. tostring(char.archived_date or 'Inconnu') .. ' | Argent: $' .. tostring(money),
+                icon = 'archive',
+                onSelect = function()
+                    showArchivedCharacterActions(char)
+                end
+            })
         end
+    end
+    
+    if #options == 0 then
+        table.insert(options, {
+            title = 'Aucun personnage archivÃ©',
+            description = 'Aucun personnage archivÃ© trouvÃ©',
+            icon = 'exclamation-triangle',
+            disabled = true
+        })
+    end
+    
+    table.insert(options, {
+        title = 'Retour',
+        description = 'Retourner au menu principal',
+        icon = 'arrow-left',
+        onSelect = function()
+            TriggerEvent('character_archive:openMenu')
+        end
+    })
+    
+    if #options > 0 then
+        lib:registerContext({
+            id = 'archived_character_list',
+            title = 'Personnages ArchivÃ©s (' .. tostring(#characters) .. ')',
+            options = options
+        })
+        lib:showContext('archived_character_list')
     end
 end)
 
-AddEventHandler('playerSpawned', function()
-    playerHealth = 100
-    healthState = "normal"
-    stateEndTime = 0
-    timerPrinted = false
-    InitializeBodyParts()
-    TriggerServerEvent('damageSystem:updateBodyParts', bodyParts)
-end)
+function showCharacterActions(character)
+    if not character or type(character) ~= 'table' or not character.firstname or not character.lastname or not character.identifier then
+        lib:notify({
+            title = 'Erreur',
+            description = 'Données du personnage invalides',
+            type = 'error'
+        })
+        return
+    end
+    
+    local options = {
+        {
+            title = 'Informations',
+            description = 'ID: ' .. tostring(character.identifier) .. '\nJob: ' .. tostring(character.job or 'Inconnu') .. ' (Grade: ' .. tostring(character.job_grade or '0') .. ')\nGroupe: ' .. tostring(character.group or 'user'),
+            icon = 'info-circle',
+            disabled = true
+        },
+        {
+            title = 'Archiver le Personnage',
+            description = 'Archiver ce personnage (le joueur ne pourra plus l\'utiliser)',
+            icon = 'archive',
+            onSelect = function()
+                local alert = lib:alertDialog({
+                    header = 'Confirmation',
+                    content = 'ÃŠtes-vous sÃ»r de vouloir archiver le personnage ' .. tostring(character.firstname) .. ' ' .. tostring(character.lastname) .. ' ?',
+                    centered = true,
+                    cancel = true
+                })
+                
+                if alert == 'confirm' then
+                    TriggerServerEvent('character_archive:archiveCharacter', character.identifier)
+                end
+            end
+        },
+        {
+            title = 'Retour',
+            description = 'Retourner Ã  la liste',
+            icon = 'arrow-left',
+            onSelect = function()
+                TriggerServerEvent('character_archive:getAllCharacters')
+            end
+        }
+    }
+    
+    lib:registerContext({
+        id = 'character_actions',
+        title = tostring(character.firstname) .. ' ' .. tostring(character.lastname),
+        options = options
+    })
+    lib:showContext('character_actions')
+end
 
-Citizen.CreateThread(function()
-    InitializeBodyParts()
-    TriggerServerEvent('damageSystem:updateBodyParts', bodyParts)
-end)
+function showArchivedCharacterActions(character)
+    if not character or type(character) ~= 'table' or not character.firstname or not character.lastname or not character.identifier then
+        lib:notify({
+            title = 'Erreur',
+            description = 'Données du personnage invalides',
+            type = 'error'
+        })
+        return
+    end
+    
+    local options = {
+        {
+            title = 'Informations',
+            description = 'ID: ' .. tostring(character.identifier) .. '\nJob: ' .. tostring(character.job or 'Inconnu') .. ' (Grade: ' .. tostring(character.job_grade or '0') .. ')\nDernière connexion: ' .. tostring(character.last_seen or 'Inconnu'),
+            icon = 'info-circle',
+            disabled = true
+        },
+        {
+            title = 'RÃ©assigner le Personnage',
+            description = 'RÃ©assigner ce personnage Ã  une nouvelle licence',
+            icon = 'user-plus',
+            onSelect = function()
+                local input = lib:inputDialog('RÃ©assigner Personnage', {
+                    {
+                        type = 'input',
+                        label = 'Nouvelle Licence',
+                        description = 'Entrez la nouvelle licence (sans char1:, char2:, etc.)',
+                        placeholder = 'd7b09bf3a327b7d1e195adf8b656e4abf1f58082',
+                        required = true,
+                        min = 10,
+                        max = 50
+                    }
+                })
+                
+                if input and input[1] then
+                    local newLicense = tostring(input[1]):gsub('%s+', ''):gsub('[^%w]', '')
+                    if #newLicense >= 10 and #newLicense <= 50 then
+                        TriggerServerEvent('character_archive:reassignCharacter', character.identifier, newLicense)
+                    else
+                        lib:notify({
+                            title = 'Erreur',
+                            description = 'La licence doit contenir entre 10 et 50 caractères alphanumériques',
+                            type = 'error'
+                        })
+                    end
+                end
+            end
+        },
+        {
+            title = 'Retour',
+            description = 'Retourner Ã  la liste des archivÃ©s',
+            icon = 'arrow-left',
+            onSelect = function()
+                TriggerServerEvent('character_archive:getArchivedCharacters')
+            end
+        }
+    }
+    
+    lib:registerContext({
+        id = 'archived_character_actions',
+        title = tostring(character.firstname) .. ' ' .. tostring(character.lastname),
+        options = options
+    })
+    lib:showContext('archived_character_actions')
+end
